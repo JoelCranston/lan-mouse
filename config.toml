@@ -20,8 +20,8 @@ position = "right"
 hostname = "iridium"
 # activate this client immediately when lan-mouse is started
 activate_on_startup = true
-# optional list of (known) ip addresses
-ips = ["192.168.178.156"]
+# optional list of (known) ip addresses (IPv4 and / or IPv6)
+ips = ["192.168.178.156", "fd00::156"]
 
 # define a client on the left side with IP address 192.168.178.189
 [[clients]]

@@ -9,7 +9,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     io,
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     rc::Rc,
     sync::{Arc, OnceLock, RwLock},
     time::Duration,
@@ -74,8 +74,14 @@ async fn connect(
     authorized_keys: Arc<RwLock<HashMap<String, String>>>,
 ) -> Result<(Arc<dyn Conn + Sync + Send>, SocketAddr), (SocketAddr, LanMouseConnectionError)> {
     log::info!("connecting to {addr} ...");
+    // bind an ephemeral socket of the same address family as the target:
+    // an IPv4 socket can not send to IPv6 addresses (and vice versa)
+    let bind_addr: SocketAddr = match addr {
+        SocketAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
     let conn = Arc::new(
-        UdpSocket::bind("0.0.0.0:0")
+        UdpSocket::bind(bind_addr)
             .await
             .map_err(|e| (addr, e.into()))?,
     );
