@@ -1,10 +1,11 @@
-use futures::{Stream, StreamExt};
+use async_trait::async_trait;
+use futures::{Stream, StreamExt, future::select_all};
 use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use rustls::pki_types::CertificateDer;
 use std::{
     collections::{HashMap, VecDeque},
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     rc::Rc,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -109,8 +110,7 @@ impl LanMouseListener {
             ..Default::default()
         };
 
-        let listen_addr = SocketAddr::new("0.0.0.0".parse().expect("invalid ip"), port);
-        let mut listener = listen(listen_addr, cfg.clone()).await?;
+        let mut listener = listen_dual_stack(port, cfg.clone()).await?;
 
         let conns: Rc<AsyncMutex<Vec<(SocketAddr, ArcConn)>>> =
             Rc::new(AsyncMutex::new(Vec::new()));
@@ -158,8 +158,7 @@ impl LanMouseListener {
                         },
                         port = request_port_change_rx.recv() => {
                             let port = port.expect("channel closed");
-                            let listen_addr = SocketAddr::new("0.0.0.0".parse().expect("invalid ip"), port);
-                            match listen(listen_addr, cfg.clone()).await {
+                            match listen_dual_stack(port, cfg.clone()).await {
                                 Ok(new_listener) => {
                                     let _ = listener.close().await;
                                     listener = new_listener;
@@ -167,7 +166,7 @@ impl LanMouseListener {
                                 }
                                 Err(e) => {
                                     log::warn!("unable to change port: {e}");
-                                    port_changed_tx.send(Err(e.into())).expect("channel closed");
+                                    port_changed_tx.send(Err(e)).expect("channel closed");
                                 }
                             };
                         },
@@ -234,6 +233,100 @@ impl LanMouseListener {
     }
 }
 
+type BoxedListener = Box<dyn Listener + Send + Sync>;
+
+/// Listens for DTLS connections on both IPv6 and IPv4.
+///
+/// Depending on the platform, a socket bound to `[::]` either accepts
+/// IPv4 connections as well (dual-stack, the default on Linux and macOS)
+/// or only IPv6 (the default on Windows). To support both cases, we
+/// bind `[::]` first and additionally bind `0.0.0.0` unless the IPv6
+/// socket already covers IPv4.
+struct DualStackListener {
+    listeners: Vec<BoxedListener>,
+}
+
+/// Returns whether an IPv6 socket bound to `[::]` accepts IPv4
+/// connections as well on this system (i.e. `IPV6_V6ONLY` is off by default).
+fn ipv6_dual_stack_default() -> bool {
+    socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)
+        .and_then(|s| s.only_v6())
+        .map(|only_v6| !only_v6)
+        .unwrap_or(false)
+}
+
+async fn listen_dual_stack(
+    port: u16,
+    cfg: Config,
+) -> Result<DualStackListener, ListenerCreationError> {
+    let mut listeners: Vec<BoxedListener> = Vec::new();
+    let mut port = port;
+
+    match listen(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)), cfg.clone()).await {
+        Ok(l) => {
+            // if port 0 was requested, use the same port for IPv4
+            if let Ok(addr) = l.addr().await {
+                port = addr.port();
+            }
+            listeners.push(Box::new(l));
+        }
+        Err(e) => log::warn!("could not listen on IPv6 (port {port}): {e}"),
+    }
+
+    let v6_covers_v4 = !listeners.is_empty() && ipv6_dual_stack_default();
+    match listen(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), cfg).await {
+        Ok(l) => listeners.push(Box::new(l)),
+        // expected on dual-stack systems: the IPv6 socket already owns the port
+        Err(e) if v6_covers_v4 => {
+            log::debug!("IPv4 is handled by the dual-stack IPv6 socket ({e})")
+        }
+        Err(e) => {
+            for l in listeners.iter() {
+                let _ = l.close().await;
+            }
+            return Err(e.into());
+        }
+    }
+
+    Ok(DualStackListener { listeners })
+}
+
+/// Converts IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`), as reported by
+/// dual-stack sockets for IPv4 peers, back into plain IPv4 addresses, so
+/// that they match the IPv4 addresses configured for a client.
+fn canonical_addr(addr: SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V6(a) => match a.ip().to_ipv4_mapped() {
+            Some(ip) => SocketAddr::new(ip.into(), a.port()),
+            None => addr,
+        },
+        SocketAddr::V4(_) => addr,
+    }
+}
+
+#[async_trait]
+impl Listener for DualStackListener {
+    async fn accept(&self) -> Result<(ArcConn, SocketAddr), Error> {
+        let accepts = self.listeners.iter().map(|l| l.accept());
+        let (res, _, _) = select_all(accepts).await;
+        res.map(|(conn, addr)| (conn, canonical_addr(addr)))
+    }
+
+    async fn close(&self) -> Result<(), Error> {
+        let mut res = Ok(());
+        for l in self.listeners.iter() {
+            if let Err(e) = l.close().await {
+                res = Err(e);
+            }
+        }
+        res
+    }
+
+    async fn addr(&self) -> Result<SocketAddr, Error> {
+        self.listeners[0].addr().await
+    }
+}
+
 impl Stream for LanMouseListener {
     type Item = ListenEvent;
 
@@ -280,4 +373,77 @@ async fn read_loop(
         .expect("connection not found");
     conns.remove(index);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UdpSocket;
+
+    #[test]
+    fn ipv4_mapped_addresses_are_canonicalized() {
+        let mapped: SocketAddr = "[::ffff:192.168.1.5]:4242".parse().unwrap();
+        assert_eq!(
+            canonical_addr(mapped),
+            "192.168.1.5:4242".parse::<SocketAddr>().unwrap()
+        );
+        let v6: SocketAddr = "[fd00::1]:4242".parse().unwrap();
+        assert_eq!(canonical_addr(v6), v6);
+        let v4: SocketAddr = "10.0.0.1:4242".parse().unwrap();
+        assert_eq!(canonical_addr(v4), v4);
+    }
+
+    fn cert() -> Certificate {
+        Certificate::generate_self_signed(vec!["ignored".to_owned()]).unwrap()
+    }
+
+    async fn dtls_connect(local: &str, target: SocketAddr) -> DTLSConn {
+        let sock = Arc::new(UdpSocket::bind(local).await.unwrap());
+        sock.connect(target).await.unwrap();
+        let config = Config {
+            certificates: vec![cert()],
+            server_name: "ignored".to_owned(),
+            insecure_skip_verify: true,
+            extended_master_secret: ExtendedMasterSecretType::Require,
+            ..Default::default()
+        };
+        DTLSConn::new(sock, config, true, None).await.unwrap()
+    }
+
+    /// accepts DTLS connections over both IPv4 and IPv6 on the same port
+    #[tokio::test]
+    async fn dual_stack_accepts_ipv4_and_ipv6() {
+        let cfg = Config {
+            certificates: vec![cert()],
+            extended_master_secret: ExtendedMasterSecretType::Require,
+            client_auth: RequireAnyClientCert,
+            insecure_skip_verify: true,
+            ..Default::default()
+        };
+        let listener = listen_dual_stack(0, cfg).await.unwrap();
+        let port = listener.addr().await.unwrap().port();
+
+        let mut targets = vec![("127.0.0.1:0", SocketAddr::from((Ipv4Addr::LOCALHOST, port)))];
+        // some environments (e.g. containers) have no IPv6 support at all
+        if std::net::UdpSocket::bind("[::1]:0").is_ok() {
+            targets.push(("[::1]:0", SocketAddr::from((Ipv6Addr::LOCALHOST, port))));
+        } else {
+            eprintln!("IPv6 unavailable, only testing IPv4");
+        }
+        for (local, target) in targets {
+            let (accepted, client) = tokio::join!(
+                tokio::time::timeout(Duration::from_secs(5), listener.accept()),
+                dtls_connect(local, target),
+            );
+            let (conn, addr) = accepted.expect("timeout").expect("accept");
+            assert_eq!(addr.ip(), target.ip(), "peer address must be canonical");
+            assert_eq!(addr.port(), client.local_addr().unwrap().port());
+
+            client.send(b"hello").await.unwrap();
+            let mut buf = [0u8; 16];
+            let n = conn.recv(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"hello");
+        }
+        listener.close().await.unwrap();
+    }
 }
