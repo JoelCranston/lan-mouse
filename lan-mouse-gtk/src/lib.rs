@@ -10,6 +10,8 @@ mod macos_privacy;
 mod macos_status_item;
 mod window;
 #[cfg(windows)]
+mod windows_autostart;
+#[cfg(windows)]
 mod windows_tray;
 
 use std::{env, process, str, sync::OnceLock};
@@ -22,6 +24,10 @@ use window::Window;
 /// peer's [`lan_mouse_ipc::ClientState::peer_commit`] for the
 /// soft-warn version-mismatch indicator.
 pub(crate) static LOCAL_COMMIT: OnceLock<[u8; 8]> = OnceLock::new();
+
+/// Set by [`run`] when launched with `--hidden`: start in the system
+/// tray / menu bar without presenting the main window.
+static START_HIDDEN: OnceLock<bool> = OnceLock::new();
 
 /// Convenience: returns the local commit as an 8-char ASCII string,
 /// or a placeholder if unset (which would indicate a programmer
@@ -51,11 +57,14 @@ pub enum GtkError {
     NonZeroExitCode(i32),
 }
 
-pub fn run(local_commit: [u8; 8]) -> Result<(), GtkError> {
+pub fn run(local_commit: [u8; 8], start_hidden: bool) -> Result<(), GtkError> {
     log::debug!("running gtk frontend");
     LOCAL_COMMIT
         .set(local_commit)
         .expect("local_commit set once");
+    START_HIDDEN
+        .set(start_hidden)
+        .expect("start_hidden set once");
 
     #[cfg(windows)]
     let ret = std::thread::Builder::new()
@@ -293,6 +302,7 @@ fn build_ui(app: &Application) {
             glib::Propagation::Stop
         });
         windows_tray::setup(app, &window);
+        windows_autostart::add_settings_row(&window);
     }
 
     glib::spawn_future_local(clone!(
@@ -342,7 +352,17 @@ fn build_ui(app: &Application) {
         }
     ));
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos"))]
+    let start_hidden = START_HIDDEN.get().copied().unwrap_or(false);
+
+    // Without a tray icon there is no way to bring a hidden window back,
+    // so `--hidden` only applies where one exists.
+    #[cfg(windows)]
+    if !start_hidden {
+        window.present();
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     window.present();
 
     // On macOS, default to presenting the main window on every launch
@@ -353,7 +373,7 @@ fn build_ui(app: &Application) {
     // where the user wants the app to come up quietly into the menu
     // bar only, with no window on boot).
     #[cfg(target_os = "macos")]
-    if env::var_os("LAN_MOUSE_HIDDEN").is_none() {
+    if !start_hidden && env::var_os("LAN_MOUSE_HIDDEN").is_none() {
         window.present();
     }
 }

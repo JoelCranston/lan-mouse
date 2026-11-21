@@ -113,6 +113,11 @@ struct Args {
     #[arg(long)]
     cert_path: Option<PathBuf>,
 
+    /// start the GUI without opening the main window
+    /// (it stays in the system tray / macOS menu bar)
+    #[arg(long)]
+    hidden: bool,
+
     /// subcommands
     #[command(subcommand)]
     command: Option<Command>,
@@ -439,6 +444,11 @@ impl Config {
     /// the command to run
     pub fn command(&self) -> Option<Command> {
         self.args.command.clone()
+    }
+
+    /// whether the frontend should start without showing its window
+    pub fn hidden(&self) -> bool {
+        self.args.hidden
     }
 
     pub fn config_path(&self) -> &Path {
