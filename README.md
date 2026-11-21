@@ -119,6 +119,9 @@ Lan Mouse can be installed from the [winget community repositories](https://gith
 winget install lan-mouse
 ```
 
+Closing the window hides Lan Mouse to the notification area (system tray) instead of quitting.
+Click the tray icon to reopen the window, or right-click it and choose "Quit Lan Mouse" to exit.
+
 </details>
 
 <details>

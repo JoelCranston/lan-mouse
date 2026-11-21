@@ -9,6 +9,8 @@ mod macos_privacy;
 #[cfg(target_os = "macos")]
 mod macos_status_item;
 mod window;
+#[cfg(windows)]
+mod windows_tray;
 
 use std::{env, process, str, sync::OnceLock};
 
@@ -280,6 +282,17 @@ fn build_ui(app: &Application) {
                 }
             }
         });
+    }
+
+    // Like the macOS menu bar item: closing the window hides it to the
+    // notification area, and the tray icon reopens it or quits.
+    #[cfg(windows)]
+    {
+        window.connect_close_request(|window| {
+            window.set_visible(false);
+            glib::Propagation::Stop
+        });
+        windows_tray::setup(app, &window);
     }
 
     glib::spawn_future_local(clone!(
