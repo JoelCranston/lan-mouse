@@ -12,7 +12,7 @@ use core_graphics::{
     base::{CGError, kCGErrorSuccess},
     display::{CGDisplay, CGPoint},
     event::{
-        CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEvent, CGEventField, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
         CGEventTapPlacement, CGEventTapProxy, CGEventType, CallbackResult, EventField,
     },
     event_source::{CGEventSource, CGEventSourceStateID},
@@ -88,11 +88,22 @@ impl InputCaptureState {
         let relative_x = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_X);
         let relative_y = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y);
 
+        // The cursor can rest exactly on the left / top bound, so the motion
+        // must also point towards the barrier. Otherwise moving along the
+        // edge would count as crossing it.
         for &position in self.active_clients.iter() {
-            if (position == Position::Left && (location.x + relative_x) <= self.bounds.xmin)
-                || (position == Position::Right && (location.x + relative_x) >= self.bounds.xmax)
-                || (position == Position::Top && (location.y + relative_y) <= self.bounds.ymin)
-                || (position == Position::Bottom && (location.y + relative_y) >= self.bounds.ymax)
+            if (position == Position::Left
+                && relative_x < 0.0
+                && (location.x + relative_x) <= self.bounds.xmin)
+                || (position == Position::Right
+                    && relative_x > 0.0
+                    && (location.x + relative_x) >= self.bounds.xmax)
+                || (position == Position::Top
+                    && relative_y < 0.0
+                    && (location.y + relative_y) <= self.bounds.ymin)
+                || (position == Position::Bottom
+                    && relative_y > 0.0
+                    && (location.y + relative_y) >= self.bounds.ymax)
             {
                 log::debug!("Crossed barrier into position: {position:?}");
                 return Some(position);
@@ -357,11 +368,20 @@ fn get_events(
             })))
         }
         CGEventType::ScrollWheel => {
+            // macOS scroll deltas use the opposite sign convention
+            // from evdev when Natural Scrolling is OFF. When it is ON
+            // the system already negates the deltas, matching evdev.
+            // Field 137 = isDirectionInvertedFromDevice (non-zero when
+            // Natural Scrolling is active).
+            const DIRECTION_INVERTED_FROM_DEVICE: CGEventField = 137;
+            let natural = ev.get_integer_value_field(DIRECTION_INVERTED_FROM_DEVICE) != 0;
+            let sign: i64 = if natural { 1 } else { -1 };
+
             if ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_IS_CONTINUOUS) != 0 {
-                let v =
-                    ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1);
-                let h =
-                    ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2);
+                let v = -sign
+                    * ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1);
+                let h = -sign
+                    * ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2);
                 if v != 0 {
                     result.push(CaptureEvent::Input(Event::Pointer(PointerEvent::Axis {
                         time: 0,
@@ -380,8 +400,10 @@ fn get_events(
                 // line based scrolling
                 const LINES_PER_STEP: i32 = 3;
                 const V120_STEPS_PER_LINE: i32 = 120 / LINES_PER_STEP;
-                let v = ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
-                let h = ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_2);
+                let v =
+                    sign * ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
+                let h =
+                    sign * ev.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_2);
                 if v != 0 {
                     result.push(CaptureEvent::Input(Event::Pointer(
                         PointerEvent::AxisDiscrete120 {

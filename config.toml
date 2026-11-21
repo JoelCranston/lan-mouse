@@ -7,7 +7,8 @@ release_bind = [ "KeyA", "KeyS", "KeyD", "KeyF" ]
 port = 4242
 
 # list of authorized tls certificate fingerprints that
-# are accepted for incoming traffic
+# are accepted for incoming traffic and required of
+# devices input is sent to
 [authorized_fingerprints]
 "bc:05:ab:7a:a4:de:88:8c:2f:92:ac:bc:b8:49:b8:24:0d:44:b3:e6:a4:ef:d7:0b:6c:69:6d:77:53:0b:14:80" = "iridium"
 
@@ -19,8 +20,8 @@ position = "right"
 hostname = "iridium"
 # activate this client immediately when lan-mouse is started
 activate_on_startup = true
-# optional list of (known) ip addresses
-ips = ["192.168.178.156"]
+# optional list of (known) ip addresses (IPv4 and / or IPv6)
+ips = ["192.168.178.156", "fd00::156"]
 
 # define a client on the left side with IP address 192.168.178.189
 [[clients]]
