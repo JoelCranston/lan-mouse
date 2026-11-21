@@ -73,6 +73,14 @@ fn command_line() -> windows::core::Result<String> {
 
 /// Add the "Start with Windows" switch to the General settings group.
 pub fn add_settings_row(window: &Window) {
+    // Point an existing entry at this executable, so autostart keeps
+    // working after an update moves the install.
+    if is_enabled() {
+        if let Err(e) = set_enabled(true) {
+            log::warn!("could not refresh autostart entry: {e}");
+        }
+    }
+
     let switch = gtk::Switch::builder()
         .valign(gtk::Align::Center)
         .active(is_enabled())

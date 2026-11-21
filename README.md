@@ -121,6 +121,8 @@ winget install lan-mouse
 
 Closing the window hides Lan Mouse to the notification area (system tray) instead of quitting.
 Click the tray icon to reopen the window, or right-click it and choose "Quit Lan Mouse" to exit.
+Turn on "Start with Windows" in the General settings to launch Lan Mouse into the tray when you sign in.
+To start it in the tray manually, run `lan-mouse --hidden`.
 
 </details>
 
