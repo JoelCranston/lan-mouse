@@ -18,6 +18,8 @@
 #   APPLE_API_KEY_P8            contents of an App Store Connect API key (.p8)
 #   APPLE_API_KEY_ID            its Key ID
 #   APPLE_API_ISSUER_ID         its Issuer ID
+#   NOTARY_KEYCHAIN_PROFILE     instead of the API key: a profile saved with
+#                               `xcrun notarytool store-credentials`
 set -euo pipefail
 
 name="${1:?usage: $0 <artifact-name>}"
@@ -84,11 +86,17 @@ if [ -n "$identity" ]; then
   codesign --force --timestamp --sign "$identity" "$dmg"
 fi
 
-if [ -n "$identity" ] && [ -n "${APPLE_API_KEY_P8:-}" ]; then
-  echo "Notarizing $dmg"
+auth=()
+if [ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]; then
+  auth=(--keychain-profile "$NOTARY_KEYCHAIN_PROFILE")
+elif [ -n "${APPLE_API_KEY_P8:-}" ]; then
   key="$work/AuthKey.p8"
   printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
   auth=(--key "$key" --key-id "${APPLE_API_KEY_ID:?}" --issuer "${APPLE_API_ISSUER_ID:?}")
+fi
+
+if [ -n "$identity" ] && [ ${#auth[@]} -gt 0 ]; then
+  echo "Notarizing $dmg"
   xcrun notarytool submit "$dmg" "${auth[@]}" --wait --output-format json \
     | tee "$work/notary.json" || true
   status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$work/notary.json")"
@@ -103,7 +111,7 @@ if [ -n "$identity" ] && [ -n "${APPLE_API_KEY_P8:-}" ]; then
   xcrun stapler staple "$app" || echo "warning: could not staple the app itself"
   spctl --assess --type execute --verbose=2 "$app" || true
 elif [ -n "$identity" ]; then
-  echo "No App Store Connect API key; signed but not notarized"
+  echo "No notary credentials; signed but not notarized"
 fi
 
 rm -f "$zip"
