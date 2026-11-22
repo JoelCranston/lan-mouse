@@ -454,7 +454,7 @@ impl Window {
     }
 
     /// Append a platform-specific row to the "General" settings group.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub(super) fn add_general_row(&self, row: &impl IsA<gtk::Widget>) {
         self.imp().general_group.add(row);
     }

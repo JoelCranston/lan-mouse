@@ -1,9 +1,13 @@
 mod authorization_window;
+#[cfg(any(windows, target_os = "macos"))]
+mod autostart;
 mod client_object;
 mod client_row;
 mod fingerprint_window;
 mod key_object;
 mod key_row;
+#[cfg(target_os = "macos")]
+mod macos_autostart;
 #[cfg(target_os = "macos")]
 mod macos_privacy;
 #[cfg(target_os = "macos")]
@@ -264,6 +268,7 @@ fn build_ui(app: &Application) {
             glib::Propagation::Stop
         });
         macos_status_item::setup(app, &window);
+        autostart::add_settings_row(&window);
         // First-launch TCC prompts. No-op when already granted.
         macos_privacy::fire_initial_prompts();
         // Watch the Accessibility grant continuously for the lifetime
@@ -302,7 +307,7 @@ fn build_ui(app: &Application) {
             glib::Propagation::Stop
         });
         windows_tray::setup(app, &window);
-        windows_autostart::add_settings_row(&window);
+        autostart::add_settings_row(&window);
     }
 
     glib::spawn_future_local(clone!(

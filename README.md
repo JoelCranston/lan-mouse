@@ -107,6 +107,7 @@ dnf install lan-mouse
 - Launch the app
 - Use the menu bar item to open the settings window or quit Lan Mouse. Bundled macOS builds run as a menu bar app and do not keep a Dock icon visible.
 - Grant accessibility permissions in System Preferences
+- To launch Lan Mouse in the menu bar when you log in, turn on "Start at login" in the General settings.
 
 </details>
 
