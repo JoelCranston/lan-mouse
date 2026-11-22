@@ -113,15 +113,22 @@ jobs:
       run: cargo build --release
     - name: Create Archive
       run: |
-        mkdir "lan-mouse-windows"
-        Get-Childitem -Path "C:\\gtk-build\\gtk\\x64\\release\\bin\\*.dll" -File -Recurse | Copy-Item -Destination "lan-mouse-windows"
-        Copy-Item -Path "target\release\lan-mouse.exe" -Destination "lan-mouse-windows"
+        .\scripts\package-windows.ps1 -OutDir lan-mouse-windows
         Compress-Archive -Path "lan-mouse-windows\*" -DestinationPath lan-mouse-windows-x86_64.zip
+    - name: Create Installer
+      run: |
+        $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+        $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+        & $iscc /DAppVersion=$version /DSourceDir="$PWD\lan-mouse-windows" /DOutputDir="$PWD" build-aux\windows\lan-mouse.iss
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     - name: Upload build artifact
       uses: actions/upload-artifact@v6
       with:
         name: lan-mouse-windows-x86_64
-        path: lan-mouse-windows-x86_64.zip
+        path: |
+          lan-mouse-windows-x86_64.zip
+          lan-mouse-windows-x86_64-setup.exe
 
   macos-release-build:
     runs-on: macos-15-intel
@@ -212,6 +219,7 @@ jobs:
           lan-mouse-macos-intel/lan-mouse-macos-intel.zip
           lan-mouse-macos-arm64/lan-mouse-macos-arm64.zip
           lan-mouse-windows-x86_64/lan-mouse-windows-x86_64.zip
+          lan-mouse-windows-x86_64/lan-mouse-windows-x86_64-setup.exe
     - name: Create Tagged Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
@@ -229,3 +237,4 @@ jobs:
           lan-mouse-macos-intel/lan-mouse-macos-intel.zip
           lan-mouse-macos-arm64/lan-mouse-macos-arm64.zip
           lan-mouse-windows-x86_64/lan-mouse-windows-x86_64.zip
+          lan-mouse-windows-x86_64/lan-mouse-windows-x86_64-setup.exe
