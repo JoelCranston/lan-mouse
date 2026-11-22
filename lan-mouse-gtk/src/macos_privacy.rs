@@ -151,7 +151,7 @@ pub fn relaunch_bundle() -> io::Result<()> {
     Ok(())
 }
 
-fn bundle_path(executable: &Path) -> io::Result<PathBuf> {
+pub(crate) fn bundle_path(executable: &Path) -> io::Result<PathBuf> {
     let macos = executable
         .parent()
         .filter(|directory| directory.file_name().is_some_and(|name| name == "MacOS"))

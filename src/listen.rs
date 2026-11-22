@@ -249,6 +249,12 @@ struct DualStackListener {
 /// Returns whether an IPv6 socket bound to `[::]` accepts IPv4
 /// connections as well on this system (i.e. `IPV6_V6ONLY` is off by default).
 fn ipv6_dual_stack_default() -> bool {
+    // `[::]` is IPv6-only by default on Windows. Don't probe there:
+    // Windows can return `IPV6_V6ONLY` as a 1-byte value, which trips a
+    // size assertion in socket2's `only_v6()` (a panic in debug builds).
+    if cfg!(windows) {
+        return false;
+    }
     socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)
         .and_then(|s| s.only_v6())
         .map(|only_v6| !only_v6)

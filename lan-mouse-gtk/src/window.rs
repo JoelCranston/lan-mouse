@@ -453,6 +453,12 @@ impl Window {
         self.add_toast(toast);
     }
 
+    /// Append a platform-specific row to the "General" settings group.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(super) fn add_general_row(&self, row: &impl IsA<gtk::Widget>) {
+        self.imp().general_group.add(row);
+    }
+
     pub(super) fn add_toast(&self, toast: adw::Toast) {
         let toast_overlay = &self.imp().toast_overlay;
         toast_overlay.add_toast(toast);
