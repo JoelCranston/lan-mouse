@@ -120,6 +120,10 @@ Lan Mouse can be installed from the [winget community repositories](https://gith
 winget install lan-mouse
 ```
 
+Alternatively, download `lan-mouse-windows-x86_64-setup.exe` from the [releases section](https://github.com/feschber/lan-mouse/releases) and run it.
+It installs Lan Mouse with its GTK runtime, adds a Start menu shortcut, and can add a firewall rule and start Lan Mouse at sign-in.
+To build the installer yourself, install [Inno Setup](https://jrsoftware.org/isinfo.php), then run `cargo build --release`, `.\scripts\package-windows.ps1` and `iscc build-aux\windows\lan-mouse.iss`; the installer is written to `target\`.
+
 Closing the window hides Lan Mouse to the notification area (system tray) instead of quitting.
 Click the tray icon to reopen the window, or right-click it and choose "Quit Lan Mouse" to exit.
 Turn on "Start with Windows" in the General settings to launch Lan Mouse into the tray when you sign in.
