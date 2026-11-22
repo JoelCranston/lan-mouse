@@ -101,10 +101,12 @@ dnf install lan-mouse
 <details>
     <summary>MacOS</summary>
 
-- Download the package for your Mac (Intel or ARM) from the releases page
-- Unzip it
-- Remove the quarantine with `xattr -rd com.apple.quarantine "Lan Mouse.app"`
+- Download the `.dmg` for your Mac (Intel or ARM) from the releases page
+- Open it and drag Lan Mouse onto the Applications folder
 - Launch the app
+- Builds that aren't notarized (the `.zip`, or a DMG built without signing
+  secrets) need the quarantine removed first:
+  `xattr -rd com.apple.quarantine "/Applications/Lan Mouse.app"`
 - Use the menu bar item to open the settings window or quit Lan Mouse. Bundled macOS builds run as a menu bar app and do not keep a Dock icon visible.
 - Grant accessibility permissions in System Preferences
 - To launch Lan Mouse in the menu bar when you log in, turn on "Start at login" in the General settings.
