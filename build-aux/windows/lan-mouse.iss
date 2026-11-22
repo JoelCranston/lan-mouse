@@ -31,6 +31,10 @@ DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; The autostart value goes to the installing user's HKCU (the same key the
+; in-app switch uses). That's the right user unless setup is elevated with
+; a different account's credentials.
+UsedUserAreasWarning=no
 LicenseFile=..\..\LICENSE
 OutputDir={#OutputDir}
 OutputBaseFilename=lan-mouse-windows-x86_64-setup
