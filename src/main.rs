@@ -1,3 +1,8 @@
+// Release builds on Windows use the GUI subsystem, so launching Lan Mouse
+// (e.g. from the tray autostart) doesn't open a console window that kills
+// the app when closed. See `init_logging` for where logs go instead.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use env_logger::Env;
 use input_capture::InputCaptureError;
 use input_emulation::InputEmulationError;
@@ -41,13 +46,47 @@ enum LanMouseError {
 }
 
 fn main() {
-    // init logging
-    let env = Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
-    env_logger::init_from_env(env);
+    init_logging();
 
     if let Err(e) = run() {
         log::error!("{e}");
         process::exit(1);
+    }
+}
+
+fn init_logging() {
+    let env = Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
+    let mut builder = env_logger::Builder::from_env(env);
+    #[cfg(all(windows, not(debug_assertions)))]
+    windows_log_target(&mut builder);
+    builder.init();
+}
+
+/// A GUI-subsystem process has no console. When started from a terminal,
+/// attach to it so CLI output and logs still show up there; otherwise
+/// (Start menu, autostart, the daemon child) log to a file in the config
+/// directory, e.g. `%LOCALAPPDATA%\lan-mouse\lan-mouse.log`.
+#[cfg(all(windows, not(debug_assertions)))]
+fn windows_log_target(builder: &mut env_logger::Builder) {
+    use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_ok() {
+        return;
+    }
+    let Some(dir) =
+        std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("lan-mouse"))
+    else {
+        return;
+    };
+    // The GUI and its daemon child run at the same time: give each its own file.
+    let name = if std::env::args().any(|a| a == "daemon") {
+        "lan-mouse-daemon.log"
+    } else {
+        "lan-mouse.log"
+    };
+    let file = std::fs::create_dir_all(&dir).and_then(|_| std::fs::File::create(dir.join(name)));
+    if let Ok(file) = file {
+        builder.target(env_logger::Target::Pipe(Box::new(file)));
     }
 }
 
