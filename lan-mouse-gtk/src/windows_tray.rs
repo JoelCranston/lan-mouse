@@ -11,7 +11,7 @@
 //! procedure runs from the regular GLib main loop without a separate
 //! message loop.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use adw::prelude::*;
 use gtk::{gdk_pixbuf::Pixbuf, gio, glib};
@@ -42,7 +42,9 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::window::Window;
+use windows::{Win32::UI::Shell::NIF_GUID, core::GUID};
+
+use crate::{window::Window, windows_tray_identity};
 
 const ICON_RESOURCE: &str = "/de/feschber/LanMouse/icons/de.feschber.LanMouse.svg";
 const TRAY_ICON_ID: u32 = 1;
@@ -63,6 +65,9 @@ struct Tray {
     /// Broadcast by Explorer after it (re)starts; the icon must be
     /// re-added or it silently disappears.
     taskbar_created: u32,
+    /// GUID the icon is registered with (see `windows_tray_identity`).
+    /// Cleared if Windows refuses it, falling back to `hWnd` + `uID`.
+    guid: Cell<Option<GUID>>,
 }
 
 thread_local! {
@@ -112,8 +117,12 @@ pub fn setup(app: &adw::Application, window: &Window) {
         icon,
         owns_icon,
         taskbar_created,
+        guid: Cell::new(windows_tray_identity::tray_guid()),
     };
     tray.add_icon();
+    if tray.guid.get().is_some() {
+        windows_tray_identity::remove_stale_entries();
+    }
     TRAY.with(|t| t.replace(Some(tray)));
 
     // Remove the icon on exit; otherwise it lingers in the notification
@@ -148,6 +157,14 @@ impl Tray {
             hIcon: self.icon,
             ..Default::default()
         };
+        // With NIF_GUID set, Windows identifies the icon by the GUID alone
+        // and requires it on every Shell_NotifyIconW call for that icon.
+        if let Some(guid) = self.guid.get() {
+            data.uFlags |= NIF_GUID;
+            data.guidItem = guid;
+        }
+        // Keep the tooltip constant: Windows shows it as the entry's name
+        // under "Other system tray icons".
         let tip: Vec<u16> = "Lan Mouse".encode_utf16().collect();
         data.szTip[..tip.len()].copy_from_slice(&tip);
         data
@@ -155,9 +172,25 @@ impl Tray {
 
     fn add_icon(&self) {
         let data = self.notify_data();
-        if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
-            log::warn!("Shell_NotifyIconW(NIM_ADD) failed");
+        if self.guid.get().is_some() {
+            // An icon with this GUID may still be registered by a previous
+            // instance that crashed (or by us, before Explorer restarted);
+            // NIM_ADD with that GUID fails until it is removed.
+            let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
         }
+        if unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
+            return;
+        }
+        if let Some(guid) = self.guid.take() {
+            // Most likely the GUID is already bound to another executable
+            // path. Better a tray icon without a stable identity than none.
+            log::warn!("Shell_NotifyIconW(NIM_ADD) with GUID {guid:?} failed, retrying without it");
+            let data = self.notify_data();
+            if unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
+                return;
+            }
+        }
+        log::warn!("Shell_NotifyIconW(NIM_ADD) failed");
     }
 }
 

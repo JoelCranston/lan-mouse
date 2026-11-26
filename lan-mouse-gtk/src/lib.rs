@@ -19,6 +19,8 @@ mod windows_autostart;
 mod windows_fullscreen;
 #[cfg(windows)]
 mod windows_tray;
+#[cfg(windows)]
+mod windows_tray_identity;
 
 use std::{env, process, str, sync::OnceLock};
 
