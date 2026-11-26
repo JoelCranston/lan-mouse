@@ -66,9 +66,9 @@ struct ConfigToml {
     emulation_backend: Option<EmulationBackend>,
     port: Option<u16>,
     release_bind: Option<Vec<scancode::Linux>>,
-    /// don't leave this device while an application (e.g. a fullscreen
-    /// game) has locked the cursor to its window (Windows only)
-    block_when_cursor_locked: Option<bool>,
+    /// don't leave this device while a fullscreen window is in the
+    /// foreground or an app has locked the cursor (Windows only)
+    block_in_fullscreen: Option<bool>,
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
@@ -513,19 +513,20 @@ impl Config {
             .unwrap_or(Vec::from_iter(DEFAULT_RELEASE_KEYS.iter().cloned()))
     }
 
-    /// whether crossing to another device is blocked while an application
-    /// has locked the cursor to its window (default: on)
-    pub fn block_when_cursor_locked(&self) -> bool {
+    /// whether crossing to another device is blocked while a fullscreen
+    /// window is in the foreground or an app has locked the cursor
+    /// (default: on)
+    pub fn block_in_fullscreen(&self) -> bool {
         self.config_toml
             .as_ref()
-            .and_then(|c| c.block_when_cursor_locked)
+            .and_then(|c| c.block_in_fullscreen)
             .unwrap_or(true)
     }
 
-    pub fn set_block_when_cursor_locked(&mut self, enabled: bool) {
+    pub fn set_block_in_fullscreen(&mut self, enabled: bool) {
         self.config_toml
             .get_or_insert_with(Default::default)
-            .block_when_cursor_locked = Some(enabled);
+            .block_in_fullscreen = Some(enabled);
     }
 
     /// set configured clients

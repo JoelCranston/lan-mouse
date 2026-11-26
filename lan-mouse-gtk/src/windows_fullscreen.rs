@@ -1,8 +1,8 @@
-//! "Stay here while a game locks the cursor" setting.
+//! "Stay here during fullscreen games" setting.
 //!
 //! When enabled, the service does not hand the cursor to another device
-//! while an application (typically a fullscreen game) has confined the
-//! cursor to its window with `ClipCursor`. The setting lives in the
+//! while a fullscreen window is in the foreground, or while an application
+//! has confined the cursor to its window with `ClipCursor`. The setting lives in the
 //! service's config file; this module shows it as a switch in the General
 //! settings group and as a check item in the tray menu.
 
@@ -14,8 +14,8 @@ use lan_mouse_ipc::FrontendRequest;
 
 use crate::window::Window;
 
-const TITLE: &str = "Stay here when the cursor is locked";
-const SUBTITLE: &str = "Don't move to another device while an app, like a fullscreen game, locks the cursor to its window";
+const TITLE: &str = "Stay here during fullscreen games";
+const SUBTITLE: &str = "Don't move to another device while a fullscreen app or game is in front, or an app locks the cursor to its window";
 
 thread_local! {
     /// Last state reported by the service (on by default).
@@ -77,6 +77,6 @@ fn request(enabled: bool) {
     // the service confirms it.
     ENABLED.set(enabled);
     if let Some(window) = WINDOW.with(|w| w.borrow().upgrade()) {
-        window.request(FrontendRequest::SetBlockWhenCursorLocked(enabled));
+        window.request(FrontendRequest::SetBlockInFullscreen(enabled));
     }
 }

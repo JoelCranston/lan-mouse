@@ -108,7 +108,7 @@ impl Service {
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
-        input_capture::set_block_when_cursor_locked(config.block_when_cursor_locked());
+        input_capture::set_block_in_fullscreen(config.block_in_fullscreen());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
 
@@ -233,9 +233,7 @@ impl Service {
                 self.update_leave_hook(handle, leave_hook)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
-            FrontendRequest::SetBlockWhenCursorLocked(enabled) => {
-                self.set_block_when_cursor_locked(enabled)
-            }
+            FrontendRequest::SetBlockInFullscreen(enabled) => self.set_block_in_fullscreen(enabled),
         }
     }
 
@@ -261,12 +259,12 @@ impl Service {
         }
     }
 
-    fn set_block_when_cursor_locked(&mut self, enabled: bool) {
-        log::info!("block crossing while cursor is locked: {enabled}");
-        input_capture::set_block_when_cursor_locked(enabled);
-        self.config.set_block_when_cursor_locked(enabled);
+    fn set_block_in_fullscreen(&mut self, enabled: bool) {
+        log::info!("block crossing during fullscreen apps: {enabled}");
+        input_capture::set_block_in_fullscreen(enabled);
+        self.config.set_block_in_fullscreen(enabled);
         self.save_config();
-        self.notify_frontend(FrontendEvent::BlockWhenCursorLocked(enabled));
+        self.notify_frontend(FrontendEvent::BlockInFullscreen(enabled));
     }
 
     fn handle_config_change(&mut self) {
@@ -285,7 +283,7 @@ impl Service {
         }
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
-        input_capture::set_block_when_cursor_locked(self.config.block_when_cursor_locked());
+        input_capture::set_block_in_fullscreen(self.config.block_in_fullscreen());
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
             .write()
@@ -424,8 +422,8 @@ impl Service {
         ));
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
-        self.notify_frontend(FrontendEvent::BlockWhenCursorLocked(
-            self.config.block_when_cursor_locked(),
+        self.notify_frontend(FrontendEvent::BlockInFullscreen(
+            self.config.block_in_fullscreen(),
         ));
     }
 

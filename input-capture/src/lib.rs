@@ -36,21 +36,23 @@ mod dummy;
 
 pub type CaptureHandle = u64;
 
-/// Whether crossing to another device is suppressed while an application
-/// confines the cursor (e.g. a game calling `ClipCursor` on Windows).
-static BLOCK_WHEN_CURSOR_LOCKED: AtomicBool = AtomicBool::new(true);
+/// Whether crossing to another device is suppressed while a fullscreen
+/// window is in the foreground or an application confines the cursor
+/// (e.g. a game calling `ClipCursor` on Windows).
+static BLOCK_IN_FULLSCREEN: AtomicBool = AtomicBool::new(true);
 
-/// Do not hand the cursor over to another device while an application has
-/// locked / confined it to a window.
+/// Do not hand the cursor over to another device while a fullscreen window
+/// (typically a game) is in the foreground, or an application has locked /
+/// confined the cursor to a window.
 ///
 /// Currently only honoured by the Windows backend; other backends ignore it.
-pub fn set_block_when_cursor_locked(enabled: bool) {
-    BLOCK_WHEN_CURSOR_LOCKED.store(enabled, Ordering::Relaxed);
+pub fn set_block_in_fullscreen(enabled: bool) {
+    BLOCK_IN_FULLSCREEN.store(enabled, Ordering::Relaxed);
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn block_when_cursor_locked() -> bool {
-    BLOCK_WHEN_CURSOR_LOCKED.load(Ordering::Relaxed)
+pub(crate) fn block_in_fullscreen() -> bool {
+    BLOCK_IN_FULLSCREEN.load(Ordering::Relaxed)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]

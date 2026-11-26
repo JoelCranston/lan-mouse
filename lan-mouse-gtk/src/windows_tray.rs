@@ -3,8 +3,7 @@
 //! Mirrors the macOS menu bar status item: closing the main window hides
 //! it instead of quitting, and the tray icon brings it back or quits the
 //! app. Left-click (or double-click) on the icon opens the window, and
-//! right-click shows a small menu (Open, "Stay here when the cursor is
-//! locked", Quit).
+//! right-click shows a small menu (Open, "Stay here during fullscreen games", Quit).
 //!
 //! The icon is owned by a hidden top-level Win32 window created on the
 //! GTK thread. GDK's Win32 event source pumps every message queued on
@@ -50,7 +49,7 @@ const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const MENU_OPEN: usize = 1;
 const MENU_QUIT: usize = 2;
-const MENU_CURSOR_LOCK: usize = 3;
+const MENU_FULLSCREEN: usize = 3;
 
 struct Tray {
     app: glib::WeakRef<adw::Application>,
@@ -228,7 +227,7 @@ unsafe fn show_menu(hwnd: HWND) {
     unsafe {
         let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Open Lan Mouse"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let check = if crate::windows_cursor_lock::is_enabled() {
+        let check = if crate::windows_fullscreen::is_enabled() {
             MF_CHECKED
         } else {
             MF_UNCHECKED
@@ -236,8 +235,8 @@ unsafe fn show_menu(hwnd: HWND) {
         let _ = AppendMenuW(
             menu,
             MF_STRING | check,
-            MENU_CURSOR_LOCK,
-            w!("Stay here when the cursor is locked"),
+            MENU_FULLSCREEN,
+            w!("Stay here during fullscreen games"),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit Lan Mouse"));
@@ -262,7 +261,7 @@ unsafe fn show_menu(hwnd: HWND) {
         match cmd.0 as usize {
             MENU_OPEN => defer(present_window),
             MENU_QUIT => defer(quit),
-            MENU_CURSOR_LOCK => defer(crate::windows_cursor_lock::toggle),
+            MENU_FULLSCREEN => defer(crate::windows_fullscreen::toggle),
             _ => {}
         }
     }
