@@ -16,6 +16,8 @@ mod window;
 #[cfg(windows)]
 mod windows_autostart;
 #[cfg(windows)]
+mod windows_cursor_lock;
+#[cfg(windows)]
 mod windows_tray;
 
 use std::{env, process, str, sync::OnceLock};
@@ -308,6 +310,7 @@ fn build_ui(app: &Application) {
         });
         windows_tray::setup(app, &window);
         autostart::add_settings_row(&window);
+        windows_cursor_lock::add_settings_row(&window);
     }
 
     glib::spawn_future_local(clone!(
@@ -352,6 +355,12 @@ fn build_ui(app: &Application) {
                     FrontendEvent::IncomingDisconnected(addr) => {
                         window.show_toast(format!("{addr} disconnected").as_str());
                     }
+                    #[cfg(windows)]
+                    FrontendEvent::BlockWhenCursorLocked(enabled) => {
+                        windows_cursor_lock::set_state(enabled)
+                    }
+                    #[cfg(not(windows))]
+                    FrontendEvent::BlockWhenCursorLocked(_) => {}
                 }
             }
         }

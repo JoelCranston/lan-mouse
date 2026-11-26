@@ -3,7 +3,8 @@
 //! Mirrors the macOS menu bar status item: closing the main window hides
 //! it instead of quitting, and the tray icon brings it back or quits the
 //! app. Left-click (or double-click) on the icon opens the window, and
-//! right-click shows a small "Open / Quit" menu.
+//! right-click shows a small menu (Open, "Stay here when the cursor is
+//! locked", Quit).
 //!
 //! The icon is owned by a hidden top-level Win32 window created on the
 //! GTK thread. GDK's Win32 event source pumps every message queued on
@@ -31,11 +32,11 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
                 DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, GetSystemMetrics, HICON,
-                ICONINFO, IDI_APPLICATION, LoadIconW, MF_SEPARATOR, MF_STRING, PostMessageW,
-                RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON,
-                SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-                WINDOW_EX_STYLE, WM_APP, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
-                WNDCLASSW, WS_OVERLAPPED,
+                ICONINFO, IDI_APPLICATION, LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+                MF_UNCHECKED, PostMessageW, RegisterClassW, RegisterWindowMessageW, SM_CXSMICON,
+                SM_CYSMICON, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+                TrackPopupMenu, WINDOW_EX_STYLE, WM_APP, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
+                WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
             },
         },
     },
@@ -49,6 +50,7 @@ const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const MENU_OPEN: usize = 1;
 const MENU_QUIT: usize = 2;
+const MENU_CURSOR_LOCK: usize = 3;
 
 struct Tray {
     app: glib::WeakRef<adw::Application>,
@@ -226,6 +228,18 @@ unsafe fn show_menu(hwnd: HWND) {
     unsafe {
         let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Open Lan Mouse"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let check = if crate::windows_cursor_lock::is_enabled() {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | check,
+            MENU_CURSOR_LOCK,
+            w!("Stay here when the cursor is locked"),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit Lan Mouse"));
 
         let mut pos = POINT::default();
@@ -248,6 +262,7 @@ unsafe fn show_menu(hwnd: HWND) {
         match cmd.0 as usize {
             MENU_OPEN => defer(present_window),
             MENU_QUIT => defer(quit),
+            MENU_CURSOR_LOCK => defer(crate::windows_cursor_lock::toggle),
             _ => {}
         }
     }

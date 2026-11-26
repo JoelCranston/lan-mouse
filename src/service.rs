@@ -108,6 +108,7 @@ impl Service {
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
+        input_capture::set_block_when_cursor_locked(config.block_when_cursor_locked());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
 
@@ -232,6 +233,9 @@ impl Service {
                 self.update_leave_hook(handle, leave_hook)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
+            FrontendRequest::SetBlockWhenCursorLocked(enabled) => {
+                self.set_block_when_cursor_locked(enabled)
+            }
         }
     }
 
@@ -257,6 +261,14 @@ impl Service {
         }
     }
 
+    fn set_block_when_cursor_locked(&mut self, enabled: bool) {
+        log::info!("block crossing while cursor is locked: {enabled}");
+        input_capture::set_block_when_cursor_locked(enabled);
+        self.config.set_block_when_cursor_locked(enabled);
+        self.save_config();
+        self.notify_frontend(FrontendEvent::BlockWhenCursorLocked(enabled));
+    }
+
     fn handle_config_change(&mut self) {
         for h in self.client_manager.registered_clients() {
             self.remove_client(h);
@@ -273,6 +285,7 @@ impl Service {
         }
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
+        input_capture::set_block_when_cursor_locked(self.config.block_when_cursor_locked());
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
             .write()
@@ -411,6 +424,9 @@ impl Service {
         ));
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
+        self.notify_frontend(FrontendEvent::BlockWhenCursorLocked(
+            self.config.block_when_cursor_locked(),
+        ));
     }
 
     const ENTER_HANDLE_BEGIN: u64 = u64::MAX / 2 + 1;

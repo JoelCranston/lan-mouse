@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
     mem::swap,
+    sync::atomic::{AtomicBool, Ordering},
     task::{Poll, ready},
 };
 
@@ -34,6 +35,23 @@ mod x11;
 mod dummy;
 
 pub type CaptureHandle = u64;
+
+/// Whether crossing to another device is suppressed while an application
+/// confines the cursor (e.g. a game calling `ClipCursor` on Windows).
+static BLOCK_WHEN_CURSOR_LOCKED: AtomicBool = AtomicBool::new(true);
+
+/// Do not hand the cursor over to another device while an application has
+/// locked / confined it to a window.
+///
+/// Currently only honoured by the Windows backend; other backends ignore it.
+pub fn set_block_when_cursor_locked(enabled: bool) {
+    BLOCK_WHEN_CURSOR_LOCKED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn block_when_cursor_locked() -> bool {
+    BLOCK_WHEN_CURSOR_LOCKED.load(Ordering::Relaxed)
+}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum CaptureEvent {
