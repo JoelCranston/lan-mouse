@@ -226,6 +226,8 @@ pub enum FrontendEvent {
     IncomingDisconnected(SocketAddr),
     /// failed connection attempt (approval for fingerprint required)
     ConnectionAttempt { fingerprint: String },
+    /// whether crossing is blocked during fullscreen apps / cursor lock
+    BlockInFullscreen(bool),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -266,6 +268,9 @@ pub enum FrontendRequest {
     UpdateLeaveHook(u64, Option<String>),
     /// save config file
     SaveConfiguration,
+    /// block / allow leaving this device while a fullscreen app is in front
+    /// or an app has locked the cursor (saved to the config file)
+    SetBlockInFullscreen(bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

@@ -6,6 +6,11 @@ release_bind = [ "KeyA", "KeyS", "KeyD", "KeyF" ]
 # optional port (defaults to 4242)
 port = 4242
 
+# Windows only: don't leave this device while a fullscreen app or game is
+# in the foreground, or an app has locked the cursor to its window
+# (defaults to true)
+block_in_fullscreen = true
+
 # list of authorized tls certificate fingerprints that
 # are accepted for incoming traffic and required of
 # devices input is sent to

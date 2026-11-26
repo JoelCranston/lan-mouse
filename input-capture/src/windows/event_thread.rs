@@ -11,19 +11,23 @@ use tokio::sync::mpsc::error::TrySendError;
 use windows::Win32::Foundation::{FALSE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     DEVMODEW, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICEW, ENUM_CURRENT_SETTINGS,
-    EnumDisplayDevicesW, EnumDisplaySettingsW,
+    EnumDisplayDevicesW, EnumDisplaySettingsW, GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITORINFO,
+    MonitorFromWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::core::{PCWSTR, w};
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DispatchMessageW, EDD_GET_DEVICE_INTERFACE_NAME, GetMessageW,
-    HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PostThreadMessageW,
-    RegisterClassW, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_STYLE,
-    WM_DISPLAYCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WNDPROC,
+    CallNextHookEx, CreateWindowExW, DispatchMessageW, EDD_GET_DEVICE_INTERFACE_NAME, GWL_STYLE,
+    GetClassNameW, GetClipCursor, GetDesktopWindow, GetForegroundWindow, GetMessageW,
+    GetShellWindow, GetSystemMetrics, GetWindowLongW, GetWindowRect, HOOKPROC, KBDLLHOOKSTRUCT,
+    LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PostThreadMessageW, RegisterClassW, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetWindowsHookExW, TranslateMessage,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_STYLE, WM_DISPLAYCHANGE, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WNDPROC, WS_CAPTION,
 };
 
 use input_event::{
@@ -289,6 +293,18 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
         return ret;
     }
 
+    /* a fullscreen game is running or an app confined the cursor: stay here */
+    if crate::block_in_fullscreen() {
+        if cursor_locked() {
+            log::debug!("cursor is locked to a window, not entering {pos}");
+            return ret;
+        }
+        if foreground_is_fullscreen() {
+            log::debug!("fullscreen window in the foreground, not entering {pos}");
+            return ret;
+        }
+    }
+
     /* update active client and entry point */
     ACTIVE_CLIENT.replace(Some(pos));
     let entry_point = DISPLAYS.with_borrow(|(displays, _)| {
@@ -302,6 +318,75 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
     blocking_send_event(active, CaptureEvent::Begin);
 
     ret
+}
+
+/// Whether some application has confined the cursor with `ClipCursor`,
+/// i.e. the clip rectangle is smaller than the virtual screen.
+fn cursor_locked() -> bool {
+    let mut clip = RECT::default();
+    if unsafe { GetClipCursor(&mut clip) }.is_err() {
+        return false;
+    }
+    let (x, y, w, h) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    clip.left > x || clip.top > y || clip.right < x + w || clip.bottom < y + h
+}
+
+/// Whether the foreground window covers its whole monitor, as fullscreen
+/// (exclusive or borderless) games do. The desktop itself is ignored.
+fn foreground_is_fullscreen() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null()
+        || hwnd == unsafe { GetDesktopWindow() }
+        || hwnd == unsafe { GetShellWindow() }
+    {
+        return false;
+    }
+
+    /* the desktop (icons) shows up as Progman / WorkerW when focused */
+    let mut class = [0u16; 32];
+    let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+    let class = String::from_utf16_lossy(&class[..len.min(class.len())]);
+    if class == "Progman" || class == "WorkerW" {
+        return false;
+    }
+
+    /*
+     * A maximized normal window also overhangs its monitor by the resize
+     * border, so require the window to have no title bar, like fullscreen
+     * and borderless-windowed games.
+     */
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
+    if style & WS_CAPTION.0 == WS_CAPTION.0 {
+        return false;
+    }
+
+    let mut window = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut window) }.is_err() {
+        return false;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) };
+    if monitor.is_invalid() {
+        return false;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return false;
+    }
+    let m = info.rcMonitor;
+    window.left <= m.left
+        && window.top <= m.top
+        && window.right >= m.right
+        && window.bottom >= m.bottom
 }
 
 unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
