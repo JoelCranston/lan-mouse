@@ -152,6 +152,12 @@ pub(crate) struct LanMouseConnection {
     recv_tx: Sender<(ClientHandle, ProtoEvent)>,
     rejected_tx: Sender<String>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    /// Clients that dropped the connection right after we sent them a
+    /// [`ProtoEvent::Hello`]. These run a build that predates Hello
+    /// (e.g. the v0.11.0 release), whose listener tears the connection
+    /// down on any event type it does not know, so we stop sending
+    /// Hello to them for the rest of this process' lifetime.
+    no_hello: Rc<RefCell<HashSet<ClientHandle>>>,
 }
 
 impl LanMouseConnection {
@@ -172,6 +178,7 @@ impl LanMouseConnection {
             recv_rx,
             recv_tx,
             ping_response: Default::default(),
+            no_hello: Default::default(),
         }
     }
 
@@ -222,6 +229,7 @@ impl LanMouseConnection {
                 self.recv_tx.clone(),
                 self.rejected_tx.clone(),
                 self.ping_response.clone(),
+                self.no_hello.clone(),
             ));
         }
         Err(LanMouseConnectionError::NotConnected)
@@ -239,6 +247,7 @@ async fn connect_to_handle(
     tx: Sender<(ClientHandle, ProtoEvent)>,
     rejected_tx: Sender<String>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    no_hello: Rc<RefCell<HashSet<ClientHandle>>>,
 ) -> Result<(), LanMouseConnectionError> {
     log::info!("client {handle} connecting ...");
     // sending did not work, figure out active conn.
@@ -262,19 +271,6 @@ async fn connect_to_handle(
         conns.lock().await.insert(addr, conn.clone());
         connecting.lock().await.remove(&handle);
 
-        // Best-effort version handshake. Send our commit hash once
-        // immediately after the DTLS handshake; the listen side
-        // mirrors a Hello back so the receive loop can populate
-        // `peer_commit`. Old peers will silently skip this event
-        // per the forward-compat handler in [`receive_loop`].
-        let (buf, len) = ProtoEvent::Hello {
-            commit: local_commit(),
-        }
-        .into();
-        if let Err(e) = conn.send(&buf[..len]).await {
-            log::debug!("hello send to {addr} failed: {e}");
-        }
-
         // poll connection for active
         spawn_local(ping_pong(addr, conn.clone(), ping_response.clone()));
 
@@ -287,6 +283,7 @@ async fn connect_to_handle(
             conns,
             tx,
             ping_response.clone(),
+            no_hello,
         ));
         return Ok(());
     }
@@ -322,6 +319,7 @@ async fn ping_pong(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn receive_loop(
     client_manager: ClientManager,
     handle: ClientHandle,
@@ -330,8 +328,10 @@ async fn receive_loop(
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
     tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    no_hello: Rc<RefCell<HashSet<ClientHandle>>>,
 ) {
     let mut buf = [0u8; MAX_EVENT_SIZE];
+    let mut hello = HelloProbe::new(!no_hello.borrow().contains(&handle));
     while conn.recv(&mut buf).await.is_ok() {
         match buf.try_into() {
             Ok(event) => {
@@ -341,8 +341,12 @@ async fn receive_loop(
                         client_manager.set_active_addr(handle, Some(addr));
                         client_manager.set_alive(handle, b);
                         ping_response.borrow_mut().insert(addr);
+                        if hello.on_pong() {
+                            send_hello(&*conn, addr).await;
+                        }
                     }
                     ProtoEvent::Hello { commit } => {
+                        hello.on_hello();
                         client_manager.set_peer_commit(handle, Some(commit));
                     }
                     event => tx.send((handle, event)).expect("channel closed"),
@@ -356,7 +360,75 @@ async fn receive_loop(
         }
     }
     log::warn!("recv error");
+    if hello.peer_rejected_hello() {
+        log::info!(
+            "client ({handle}) @ {addr} closed the connection right after our Hello; \
+             assuming it runs an older Lan Mouse (e.g. v0.11.0) and not sending Hello to it again"
+        );
+        no_hello.borrow_mut().insert(handle);
+    }
     disconnect(&client_manager, handle, addr, &conns).await;
+}
+
+/// Best-effort version handshake: send our commit hash so the peer can
+/// show it. A peer that knows Hello mirrors one back.
+async fn send_hello(conn: &(dyn Conn + Send + Sync), addr: SocketAddr) {
+    let (buf, len) = ProtoEvent::Hello {
+        commit: local_commit(),
+    }
+    .into();
+    if let Err(e) = conn.send(&buf[..len]).await {
+        log::debug!("hello send to {addr} failed: {e}");
+    }
+}
+
+/// Decides when to send [`ProtoEvent::Hello`] on an outgoing connection
+/// and whether the peer turned out to be too old for it.
+///
+/// Builds before Hello (such as the v0.11.0 release) close the connection
+/// when they receive an event type they don't know, so Hello is probed
+/// carefully: it is sent only after the first `Pong`, which proves the
+/// peer is up and answering. If the connection then ends before any
+/// further `Pong` (or a Hello reply) arrives, the peer dropped it because
+/// of the Hello, and the caller stops sending Hello to it. Pings go out
+/// every 500ms, so on a working peer the next `Pong` follows quickly.
+struct HelloProbe {
+    enabled: bool,
+    sent: bool,
+    confirmed: bool,
+}
+
+impl HelloProbe {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            sent: false,
+            confirmed: false,
+        }
+    }
+
+    /// Returns true when Hello should be sent now.
+    fn on_pong(&mut self) -> bool {
+        if self.sent {
+            self.confirmed = true;
+            false
+        } else if self.enabled {
+            self.sent = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn on_hello(&mut self) {
+        self.confirmed = true;
+    }
+
+    /// True if the connection ended after Hello was sent and before the
+    /// peer showed it was still talking to us.
+    fn peer_rejected_hello(&self) -> bool {
+        self.sent && !self.confirmed
+    }
 }
 
 async fn disconnect(
@@ -401,6 +473,151 @@ mod tests {
         let rejected = OnceLock::new();
         assert!(verify_peer(&[cert], &authorized, &rejected).is_err());
         assert_eq!(rejected.get(), Some(&fingerprint));
+    }
+
+    #[test]
+    fn hello_probe_sends_once_after_first_pong() {
+        let mut probe = HelloProbe::new(true);
+        assert!(probe.on_pong());
+        assert!(!probe.on_pong());
+        assert!(!probe.on_pong());
+        assert!(!probe.peer_rejected_hello());
+    }
+
+    #[test]
+    fn hello_probe_detects_old_peer() {
+        // v0.11.0: answers pings until it sees Hello, then drops the connection
+        let mut probe = HelloProbe::new(true);
+        assert!(probe.on_pong());
+        assert!(probe.peer_rejected_hello());
+    }
+
+    #[test]
+    fn hello_probe_hello_reply_confirms() {
+        let mut probe = HelloProbe::new(true);
+        assert!(probe.on_pong());
+        probe.on_hello();
+        assert!(!probe.peer_rejected_hello());
+    }
+
+    #[test]
+    fn hello_probe_never_pinged_is_not_old_peer() {
+        // connection died before the peer ever answered: not Hello's fault
+        let probe = HelloProbe::new(true);
+        assert!(!probe.peer_rejected_hello());
+    }
+
+    #[test]
+    fn hello_probe_disabled_never_sends() {
+        let mut probe = HelloProbe::new(false);
+        assert!(!probe.on_pong());
+        assert!(!probe.on_pong());
+        assert!(!probe.peer_rejected_hello());
+    }
+
+    /// Minimal DTLS listener that answers `Ping` with `Pong` and, like the
+    /// listener in older releases, optionally drops the connection on any
+    /// event it can't decode. Counts the Hellos it receives.
+    async fn mock_peer(cert: Certificate, knows_hello: bool, hellos: Rc<RefCell<usize>>) -> u16 {
+        use webrtc_util::conn::Listener;
+        let cfg = Config {
+            certificates: vec![cert],
+            extended_master_secret: ExtendedMasterSecretType::Require,
+            ..Default::default()
+        };
+        let listener = webrtc_dtls::listener::listen("127.0.0.1:0", cfg)
+            .await
+            .expect("listen");
+        let port = listener.addr().await.expect("addr").port();
+        spawn_local(async move {
+            loop {
+                let Ok((conn, _)) = listener.accept().await else {
+                    return;
+                };
+                let hellos = hellos.clone();
+                spawn_local(async move {
+                    let mut buf = [0u8; MAX_EVENT_SIZE];
+                    while conn.recv(&mut buf).await.is_ok() {
+                        let event = buf.try_into();
+                        if let Ok(ProtoEvent::Hello { .. }) = event {
+                            *hellos.borrow_mut() += 1;
+                            if !knows_hello {
+                                // v0.11.0 `read_loop`: `break` on decode error
+                                return;
+                            }
+                            let (b, l) = ProtoEvent::Hello {
+                                commit: *b"mockpeer",
+                            }
+                            .into();
+                            let _ = conn.send(&b[..l]).await;
+                            continue;
+                        }
+                        if let Ok(ProtoEvent::Ping) = event {
+                            let (b, l) = ProtoEvent::Pong(true).into();
+                            let _ = conn.send(&b[..l]).await;
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// Connects to a mock peer and keeps sending until the connection has
+    /// stayed usable for a while. Returns (hellos seen by peer, peer commit).
+    async fn connect_to_mock(knows_hello: bool) -> (usize, Option<[u8; 8]>) {
+        let server_cert =
+            Certificate::generate_self_signed(vec!["ignored".to_owned()]).expect("certificate");
+        let fingerprint = crypto::generate_fingerprint(&server_cert.certificate[0]);
+        let hellos = Rc::new(RefCell::new(0));
+        let port = mock_peer(server_cert, knows_hello, hellos.clone()).await;
+
+        let client_manager = ClientManager::default();
+        let handle = client_manager.add_client();
+        client_manager.set_fix_ips(handle, vec!["127.0.0.1".parse().unwrap()]);
+        client_manager.set_port(handle, port);
+        let authorized = Arc::new(RwLock::new(HashMap::from([(fingerprint, "p".into())])));
+        let (rejected_tx, _rejected_rx) = channel();
+        let cert =
+            Certificate::generate_self_signed(vec!["ignored".to_owned()]).expect("certificate");
+        let conn = LanMouseConnection::new(cert, client_manager.clone(), authorized, rejected_tx);
+
+        // require ~4s (several ping rounds) of uninterrupted connectivity
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let mut ok_streak = 0;
+        while ok_streak < 40 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "connection never became stable"
+            );
+            match conn.send(ProtoEvent::Leave(0), handle).await {
+                Ok(()) => ok_streak += 1,
+                Err(_) => ok_streak = 0,
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let commit = client_manager
+            .get_state(handle)
+            .and_then(|(_, s)| s.peer_commit);
+        let hellos = *hellos.borrow();
+        (hellos, commit)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connects_to_peer_without_hello_support() {
+        let local = tokio::task::LocalSet::new();
+        let (hellos, commit) = local.run_until(connect_to_mock(false)).await;
+        // probed exactly once, then the reconnect leaves Hello out
+        assert_eq!(hellos, 1);
+        assert_eq!(commit, None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exchanges_hello_with_new_peer() {
+        let local = tokio::task::LocalSet::new();
+        let (hellos, commit) = local.run_until(connect_to_mock(true)).await;
+        assert_eq!(hellos, 1);
+        assert_eq!(commit, Some(*b"mockpeer"));
     }
 
     #[test]
